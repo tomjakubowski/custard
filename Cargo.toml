@@ -3,3 +3,7 @@
 name = "ironic"
 version = "0.0.1"
 authors = ["Tom Jakubowski <tom@crystae.net>"]
+
+[[bin]]
+name = "ironic"
+path = "src/bin/ironic.rs"
