@@ -5,12 +5,13 @@ extern crate syntax;
 
 use rustc_driver::driver;
 use rustc::session::{mod, config};
+use rustc::middle::def;
 use rustc::middle::ty;
 
 use syntax::{ast, ast_map, codemap, diagnostic, visit};
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use arena::TypedArena;
 
 pub use rustc::session::config::Input;
@@ -57,51 +58,105 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
 
     let type_arena = TypedArena::new();
     let ty::CrateAnalysis {
-        ty_cx, ..
+        ref ty_cx, ..
     } = driver::phase_3_run_analysis_passes(sess, ast_map, &type_arena, name);
 
-    let ctxt = CDeclContext {
-        krate: ty_cx.map.krate(),
-        _ty_cx: ty_cx
+    // let ctxt = CDeclContext {
+    //     krate: ty_cx.map.krate(),
+    //     ty_cx: ty_cx
+    // };
+
+    let mut visitor = CDeclVisitor {
+        funcs: HashSet::new(),
+        tys: HashSet::new(),
+        tcx: ty_cx
     };
 
-    let mut visitor = CDeclVisitor::new();
+    visit::walk_crate(&mut visitor, ty_cx.map.krate());
 
-    visit::walk_crate(&mut visitor, ctxt.krate);
-
-    println!("ok");
+    println!("ok:\n{}\n{}", visitor.funcs, visitor.tys);
 }
 
-pub struct CDeclContext<'tcx> {
-    krate: &'tcx ast::Crate,
-    _ty_cx: ty::ctxt<'tcx>
+// pub struct CDeclContext<'tcx> {
+//     krate: &'tcx ast::Crate,
+//     tcx: ty::ctxt<'tcx>
+// }
+
+// rust types
+
+#[deriving(Clone, Copy, Show, Hash, PartialEq, Eq)]
+pub enum Primitive {
+    I8,
 }
 
-#[deriving(Default)]
-/// Collects all extern "C" fn definitions and the types referenced in
-/// their signatures from a given crate.
-pub struct CDeclVisitor {
-    funcs: Vec<ast::NodeId>,
-    _tys: Vec<ast::NodeId>
+#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+pub enum Type {
+    Primitive(Primitive),
+    ResolvedPath {
+        path: ast::Path,
+        did: ast::DefId
+    }
 }
 
-impl CDeclVisitor {
-    pub fn new() -> CDeclVisitor {
-        CDeclVisitor {
-            ..std::default::Default::default()
+#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+pub struct FnDecl {
+    name: String,
+    inputs: Vec<Type> // FIXME needs names
+}
+
+/// Collects all C ABI fn definitions and the types referenced in their
+/// signatures from a given crate.
+pub struct CDeclVisitor<'tcx> {
+    funcs: HashSet<FnDecl>,
+    tys: HashSet<Type>,
+    tcx: &'tcx ty::ctxt<'tcx>
+}
+
+impl<'a> visit::Visitor<'a> for CDeclVisitor<'a> {
+    fn visit_fn(&mut self, fn_kind: visit::FnKind, fn_decl: &'a ast::FnDecl,
+                _: &'a ast::Block, _: codemap::Span, _: ast::NodeId) {
+        use syntax::abi::Abi;
+        use syntax::ast::Arg;
+        use syntax::visit::FnKind::FkItemFn;
+
+        if let FkItemFn(id, _, _, Abi::C) = fn_kind {
+            let inputs = fn_decl.inputs.iter().map(|&Arg { ref ty, .. }| {
+                let ty = resolve_type(self.tcx, &**ty);
+                self.tys.insert(ty.clone());
+                ty
+            }).collect::<Vec<_>>();
+
+            let fun = FnDecl {
+                name: id.as_str().into_string(),
+                inputs: inputs
+            };
+
+            println!("Adding fn {}", id.as_str());
+            self.funcs.insert(fun);
         }
     }
 }
 
-impl<'a> visit::Visitor<'a> for CDeclVisitor {
-    fn visit_fn(&mut self, fn_kind: visit::FnKind, fn_decl: &'a ast::FnDecl,
-                _: &'a ast::Block, _: codemap::Span, node: ast::NodeId) {
-        use syntax::abi::Abi;
-        use syntax::visit::FnKind::FkItemFn;
-
-        if let FkItemFn(id, _, _, Abi::C) = fn_kind {
-            println!("Adding fn {} ({})", id.as_str(), fn_decl);
-            self.funcs.push(node)
+fn resolve_type<'cx>(tcx: &'cx ty::ctxt<'cx>, ty: &ast::Ty) -> Type {
+    let (path, def) = match ty.node {
+        ast::TyPath(ref path, id) => {
+            match tcx.def_map.borrow().get(&id) {
+                Some(&def) => (path.clone(), def),
+                None => panic!("node id {} missing in def_map", id)
+            }
         }
+        _ => unimplemented!()
+    };
+
+    match def {
+        def::DefPrimTy(p) => match p {
+            ast::TyInt(ast::TyI8) => Type::Primitive(Primitive::I8),
+            _ => unimplemented!()
+        },
+        def::DefTy(def_id, false) => Type::ResolvedPath {
+            path: path,
+            did: def_id
+        },
+        _ => panic!("not yet implemented: {}", def)
     }
 }
