@@ -9,12 +9,15 @@ use rustc::middle::def;
 use rustc::middle::ty;
 
 use syntax::{ast, ast_map, codemap, diagnostic, visit};
+use syntax::ast::NodeId;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use arena::TypedArena;
 
 pub use rustc::session::config::Input;
+
+mod cdecl;
 
 pub type Externs = HashMap<String, Vec<String>>;
 
@@ -61,36 +64,42 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
         ref ty_cx, ..
     } = driver::phase_3_run_analysis_passes(sess, ast_map, &type_arena, name);
 
-    // let ctxt = CDeclContext {
-    //     krate: ty_cx.map.krate(),
-    //     ty_cx: ty_cx
-    // };
-
-    let mut visitor = CDeclVisitor {
+    let mut visitor = CFnDeclVisitor {
         funcs: HashSet::new(),
-        tys: HashSet::new(),
+        // tys: HashSet::new(),
         tcx: ty_cx
     };
 
     visit::walk_crate(&mut visitor, ty_cx.map.krate());
 
-    println!("ok:\n{}\n{}", visitor.funcs, visitor.tys);
+    // write needed includes (FIXME: this should actually be computed)
+    println!("#include <stdint.h>");
+    println!("");
+
+    // write fn prototypes
+    for f in visitor.funcs.iter() {
+        use cdecl::Cdecl;
+        println!("{}", f.cdecl());
+    }
 }
 
-// pub struct CDeclContext<'tcx> {
-//     krate: &'tcx ast::Crate,
-//     tcx: ty::ctxt<'tcx>
-// }
+trait Clean<T> {
+    fn clean(&self, &ty::ctxt) -> T;
+}
 
-// rust types
+// "cleaned" rust types
 
 #[deriving(Clone, Copy, Show, Hash, PartialEq, Eq)]
 pub enum Primitive {
+    Unit,
     I8,
+    I16,
+    I32,
+    I64
 }
 
 #[deriving(Clone, Show, Hash, PartialEq, Eq)]
-pub enum Type {
+pub enum TypeKind {
     Primitive(Primitive),
     ResolvedPath {
         path: ast::Path,
@@ -99,64 +108,132 @@ pub enum Type {
 }
 
 #[deriving(Clone, Show, Hash, PartialEq, Eq)]
+pub struct Type {
+    kind: TypeKind,
+    node: NodeId
+}
+
+#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+pub struct Arg {
+    name: String,
+    ty: Type,
+    node: NodeId
+}
+
+#[deriving(Clone, Show, Hash, PartialEq, Eq)]
 pub struct FnDecl {
     name: String,
-    inputs: Vec<Type> // FIXME needs names
+    inputs: Vec<Arg>,
+    output: Type,
+    span: codemap::Span
 }
 
-/// Collects all C ABI fn definitions and the types referenced in their
-/// signatures from a given crate.
-pub struct CDeclVisitor<'tcx> {
-    funcs: HashSet<FnDecl>,
-    tys: HashSet<Type>,
-    tcx: &'tcx ty::ctxt<'tcx>
-}
+impl Clean<FnDecl> for ast::Item {
+    fn clean(&self, tcx: &ty::ctxt) -> FnDecl {
+        use syntax::ast::ItemFn;
 
-impl<'a> visit::Visitor<'a> for CDeclVisitor<'a> {
-    fn visit_fn(&mut self, fn_kind: visit::FnKind, fn_decl: &'a ast::FnDecl,
-                _: &'a ast::Block, _: codemap::Span, _: ast::NodeId) {
-        use syntax::abi::Abi;
-        use syntax::ast::Arg;
-        use syntax::visit::FnKind::FkItemFn;
-
-        if let FkItemFn(id, _, _, Abi::C) = fn_kind {
-            let inputs = fn_decl.inputs.iter().map(|&Arg { ref ty, .. }| {
-                let ty = resolve_type(self.tcx, &**ty);
-                self.tys.insert(ty.clone());
-                ty
-            }).collect::<Vec<_>>();
-
-            let fun = FnDecl {
-                name: id.as_str().into_string(),
-                inputs: inputs
-            };
-
-            println!("Adding fn {}", id.as_str());
-            self.funcs.insert(fun);
+        // FIXME: mangled names... export_name...
+        match self.node {
+            ItemFn(ref decl, _, _, _, _) => FnDecl {
+                name: self.ident.as_str().into_string(),
+                inputs: decl.inputs.clean(tcx),
+                output: decl.output.clean(tcx),
+                span: self.span
+            },
+            _ => unreachable!()
         }
     }
 }
 
-fn resolve_type<'cx>(tcx: &'cx ty::ctxt<'cx>, ty: &ast::Ty) -> Type {
-    let (path, def) = match ty.node {
-        ast::TyPath(ref path, id) => {
-            match tcx.def_map.borrow().get(&id) {
-                Some(&def) => (path.clone(), def),
-                None => panic!("node id {} missing in def_map", id)
+impl<T: Clean<C>, C> Clean<Vec<C>> for Vec<T> {
+    fn clean(&self, tcx: &ty::ctxt) -> Vec<C> {
+        self.iter().map(|x| x.clean(tcx)).collect()
+    }
+}
+
+impl Clean<String> for ast::Pat {
+    fn clean(&self, _: &ty::ctxt) -> String {
+        match self.node {
+            ast::PatIdent(_, ref ident, _) => {
+                ident.node.as_str().into_string()
+            }
+            _ => panic!("unimplemented: {}", self)
+        }
+    }
+}
+
+impl Clean<Arg> for ast::Arg {
+    fn clean(&self, tcx: &ty::ctxt) -> Arg {
+        Arg {
+            name: self.pat.clean(tcx),
+            ty: self.ty.clean(tcx),
+            node: self.id
+        }
+    }
+}
+
+impl Clean<Type> for ast::Ty {
+    fn clean(&self, tcx: &ty::ctxt) -> Type {
+        // FIXME: is_ffi_safe
+        let (path, def) = match self.node {
+            ast::TyPath(ref path, id) => {
+                match tcx.def_map.borrow().get(&id) {
+                    Some(&def) => (path.clone(), def),
+                    None => panic!("node id {} missing in def_map", id)
+                }
+            }
+            _ => unimplemented!()
+        };
+
+        let kind = match def {
+            def::DefPrimTy(p) => match p {
+                ast::TyInt(ast::TyI8)  => TypeKind::Primitive(Primitive::I8),
+                ast::TyInt(ast::TyI16) => TypeKind::Primitive(Primitive::I16),
+                ast::TyInt(ast::TyI32) => TypeKind::Primitive(Primitive::I32),
+                ast::TyInt(ast::TyI64) => TypeKind::Primitive(Primitive::I64),
+                _ => unimplemented!()
+            },
+            def::DefTy(def_id, false) => TypeKind::ResolvedPath {
+                path: path,
+                did: def_id
+            },
+            _ => panic!("not yet implemented: {}", def)
+        };
+
+        Type {
+            kind: kind,
+            node: self.id
+        }
+    }
+}
+
+impl<'a> Clean<Type> for ast::FunctionRetTy {
+    fn clean(&self, tcx: &ty::ctxt) -> Type {
+        use syntax::ast::FunctionRetTy::{NoReturn, Return};
+        match *self {
+            Return(ref ty) => ty.clean(tcx),
+            NoReturn(_) => Type {
+                kind: TypeKind::Primitive(Primitive::Unit),
+                node: ast::DUMMY_NODE_ID
             }
         }
-        _ => unimplemented!()
-    };
+    }
+}
 
-    match def {
-        def::DefPrimTy(p) => match p {
-            ast::TyInt(ast::TyI8) => Type::Primitive(Primitive::I8),
-            _ => unimplemented!()
-        },
-        def::DefTy(def_id, false) => Type::ResolvedPath {
-            path: path,
-            did: def_id
-        },
-        _ => panic!("not yet implemented: {}", def)
+/// Collects all public C ABI fn definitions from a given crate.
+pub struct CFnDeclVisitor<'tcx> {
+    funcs: HashSet<FnDecl>,
+    tcx: &'tcx ty::ctxt<'tcx>
+}
+
+impl<'a> visit::Visitor<'a> for CFnDeclVisitor<'a> {
+    fn visit_item(&mut self, item: &'a ast::Item) {
+        use syntax::abi::Abi;
+        use syntax::ast::Item_::ItemFn;
+
+        if item.vis != ast::Visibility::Public { return }
+        if let ItemFn(_, _, Abi::C, _, _) = item.node {
+            self.funcs.insert(item.clean(self.tcx));
+        }
     }
 }
