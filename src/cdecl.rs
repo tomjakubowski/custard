@@ -1,6 +1,6 @@
-// FIXME: these names are nonsense
-use {Arg, FnDecl, Primitive, Type, TypeKind};
+use clean::{Arg, FnDecl, Primitive, Type};
 
+// FIXME: these names are nonsense
 pub trait Cdecl {
     fn cdecl(&self) -> String;
 }
@@ -37,11 +37,11 @@ pub trait CtypeSpec {
 
 impl CtypeSpec for Type {
     fn ctype_spec(&self) -> String {
-        match self.kind {
-            TypeKind::Primitive(Primitive::I8) => "int8_t".into_string(),
-            TypeKind::Primitive(Primitive::I16) => "int16_t".into_string(),
-            TypeKind::Primitive(Primitive::I32) => "int32_t".into_string(),
-            TypeKind::Primitive(Primitive::I64) => "int64_t".into_string(),
+        match *self {
+            Type::Primitive(Primitive::I8) => "int8_t".into_string(),
+            Type::Primitive(Primitive::I16) => "int16_t".into_string(),
+            Type::Primitive(Primitive::I32) => "int32_t".into_string(),
+            Type::Primitive(Primitive::I64) => "int64_t".into_string(),
             _ => unimplemented!()
 
         }
