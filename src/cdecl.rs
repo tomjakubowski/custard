@@ -31,6 +31,18 @@ impl Cdecl for Vec<Arg> {
     }
 }
 
+impl Cdecl for Type {
+    fn cdecl(&self) -> String {
+        match *self {
+            Type::ResolvedPath { ref path, .. } => {
+                let ref last = path.segments[path.segments.len() - 1];
+                format!("struct {}", last.identifier.as_str()) // wrrrooonnngggg
+            }
+            Type::Primitive(_) => panic!("cannot redeclare a primitive!"),
+        }
+    }
+}
+
 pub trait CtypeSpec {
     fn ctype_spec(&self) -> String;
 }
@@ -42,6 +54,10 @@ impl CtypeSpec for Type {
             Type::Primitive(Primitive::I16) => "int16_t".into_string(),
             Type::Primitive(Primitive::I32) => "int32_t".into_string(),
             Type::Primitive(Primitive::I64) => "int64_t".into_string(),
+            Type::ResolvedPath { ref path, .. } => {
+                let ref last = path.segments[path.segments.len() - 1];
+                format!("struct {}", last.identifier.as_str())
+            }
             _ => unimplemented!()
 
         }

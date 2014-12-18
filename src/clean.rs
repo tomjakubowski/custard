@@ -31,7 +31,7 @@ pub enum Type {
 pub struct Arg {
     pub name: String,
     pub ty: Type,
-    pub node: NodeId
+    pub ty_node: NodeId
 }
 
 #[deriving(Clone, Show, Hash, PartialEq, Eq)]
@@ -81,7 +81,7 @@ impl Clean<Arg> for ast::Arg {
         Arg {
             name: self.pat.clean(tcx),
             ty: self.ty.clean(tcx),
-            node: self.id
+            ty_node: self.ty.id
         }
     }
 }
@@ -90,12 +90,7 @@ impl Clean<Type> for ast::Ty {
     fn clean(&self, tcx: &ty::ctxt) -> Type {
         // FIXME: is_ffi_safe
         let (path, def) = match self.node {
-            ast::TyPath(ref path, id) => {
-                match tcx.def_map.borrow().get(&id) {
-                    Some(&def) => (path.clone(), def),
-                    None => panic!("node id {} missing in def_map", id)
-                }
-            }
+            ast::TyPath(ref path, id) => (path.clone(), tcx.def_map.borrow()[id]),
             _ => unimplemented!()
         };
 
