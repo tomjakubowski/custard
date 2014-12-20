@@ -11,7 +11,7 @@ use rustc_driver::driver;
 use rustc::session::{mod, config};
 use rustc::middle::ty;
 
-use syntax::{ast, ast_map, codemap, diagnostic, visit};
+use syntax::{ast, ast_map, ast_util, codemap, diagnostic, visit};
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -19,7 +19,7 @@ use arena::TypedArena;
 
 pub use rustc::session::config::Input;
 
-use clean::{Arg, Clean, FnDecl, Type};
+use clean::{Arg, Clean, FnDecl, Return, Struct};
 
 mod cdecl;
 mod clean;
@@ -41,6 +41,7 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
         externs: externs,
         target_triple: triple.unwrap_or(config::host_triple().to_string()),
         cfg: config::parse_cfgspecs(cfgs),
+        // FIXME: use the improper_ctypes lint once #19834 is fixed
         ..config::basic_options().clone()
     };
 
@@ -69,18 +70,26 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
         ref ty_cx, ..
     } = driver::phase_3_run_analysis_passes(sess, ast_map, &type_arena, name);
 
-    let mut visitor = CFnDeclVisitor {
-        funcs: Vec::new(),
-        defs: HashSet::new(),
-        tcx: ty_cx
-    };
+    let mut fn_visitor = CFnDeclVisitor::new(ty_cx);
+    visit::walk_crate(&mut fn_visitor, ty_cx.map.krate());
 
-    visit::walk_crate(&mut visitor, ty_cx.map.krate());
+    debug!("type node ids: {}", fn_visitor.types);
+
+    debug!("ast_ty_to... {}",
+           ty_cx.ast_ty_to_ty_cache.borrow().keys().collect::<Vec<_>>());
+
+    let mut ty_visitor = CTypeVisitor::new(ty_cx, fn_visitor.types);
+    visit::walk_crate(&mut ty_visitor, ty_cx.map.krate());
+
+    debug!("ty_visitor structs: {}", ty_visitor.structs);
+
+    // let types = collect_types(ty_cx, visitor.types.iter().map(|&x| x));
+    // debug!("types: {}", types);
 
     // TODO: Do this in two passes:
     // 1) Walk over fns, collecting + cleaning pub extern ones, and the def or node IDs
     //    of types referenced in the inputs/output of those fns. Check for no_mangle and
-    //    export_name.  Args should be Type::ResolvedPath.
+    //    export_name.  Args should be Type::ResolvedPath or Primitive.
     // 2) Walk over struct/enum/... items, collecting + cleaning those which correspond
     //    to the def or node IDs. Check is_ffi_safe and whatever else.  Cleaned output
     //    be an enum Item {
@@ -95,20 +104,20 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
     println!("#include <stdint.h>");
     println!("");
 
-    // write forward decls of types... (FIXME: lol)
-    for t in visitor.defs.iter() {
+    // write forward decls of types... (FIXME: lol (these should also be computed))
+    for t in ty_visitor.structs.iter() {
         use cdecl::CtypeSpec;
         println!("{};", t.ctype_spec());
     }
 
     // write actual decls of types
-    for t in visitor.defs.iter() {
+    for t in ty_visitor.structs.iter() {
         use cdecl::Cdecl;
-        println!("{};", t.cdecl());
+        println!("{}", t.cdecl());
     }
 
     // write fn prototypes
-    for f in visitor.funcs.iter() {
+    for f in fn_visitor.funcs.iter() {
         use cdecl::Cdecl;
         println!("{}", f.cdecl());
     }
@@ -116,30 +125,100 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
 
 struct CFnDeclVisitor<'tcx> {
     funcs: Vec<FnDecl>,
-    defs: HashSet<Type>,
+    types: HashSet<ast::NodeId>,
     tcx: &'tcx ty::ctxt<'tcx>
+}
+
+impl<'tcx> CFnDeclVisitor<'tcx> {
+    fn new<'a>(tcx: &'a ty::ctxt<'a>) -> CFnDeclVisitor<'a> {
+        CFnDeclVisitor {
+            funcs: vec![],
+            types: HashSet::new(),
+            tcx: tcx
+        }
+    }
+}
+
+struct CTypeVisitor<'tcx> {
+    types: HashSet<ast::NodeId>,
+    structs: Vec<Struct>,
+    tcx: &'tcx ty::ctxt<'tcx>
+}
+
+impl<'tcx> CTypeVisitor<'tcx> {
+    fn new<'a>(tcx: &'a ty::ctxt<'a>, types: HashSet<ast::NodeId>) -> CTypeVisitor<'a> {
+        CTypeVisitor {
+            types: types,
+            structs: vec![],
+            tcx: tcx
+        }
+    }
 }
 
 impl<'a> visit::Visitor<'a> for CFnDeclVisitor<'a> {
     fn visit_item(&mut self, item: &'a ast::Item) {
         use syntax::abi::Abi;
         use syntax::ast::Item_::ItemFn;
+        use clean::Type::ResolvedPath;
+
+        fn check_ty(tcx: &ty::ctxt, node: ast::NodeId) -> bool {
+            let tty = match tcx.ast_ty_to_ty_cache.borrow()[node] {
+                ty::atttce_resolved(tty) => tty,
+                _ => panic!("ty missing from attt cache")
+            };
+            ty::is_ffi_safe(tcx, tty)
+        }
 
         if item.vis != ast::Visibility::Public { return }
-        if let ItemFn(_, _, Abi::C, _, _) = item.node {
-            let func = item.clean(self.tcx);
-            for &Arg { ref ty, ty_node, .. } in func.inputs.iter() {
-                if let &Type::ResolvedPath { did, .. } = ty {
-                    debug!("found a resolved path in the args: {}", did);
-                    let &tty = match self.tcx.ast_ty_to_ty_cache.borrow()[ty_node] {
-                        ty::atttce_resolved(ref ty) => ty,
-                        _ => panic!()
-                    };
-                    assert!(ty::is_ffi_safe(self.tcx, tty));
-                    self.defs.insert(ty.clone());
+
+        if let ItemFn(ref fn_decl, _, Abi::C, _, _) = item.node {
+            debug!("ItemFn {}", item.ident.as_str());
+
+            for &ast::Arg { ref ty, .. } in fn_decl.inputs.iter() {
+                if !check_ty(self.tcx, ty.id) {
+                    self.tcx.sess.span_fatal(ty.span, "bad type!");
                 }
             }
+            if let ast::FunctionRetTy::Return(ref ty) = fn_decl.output {
+                if !check_ty(self.tcx, ty.id) {
+                    self.tcx.sess.span_fatal(ty.span, "bad type!");
+                }
+            }
+
+            let func: FnDecl = item.clean(self.tcx);
+            for &Arg { ref ty, .. } in func.inputs.iter() {
+                if let &ResolvedPath { did, .. } = ty {
+                    if ast_util::is_local(did) {
+                        self.types.insert(did.node);
+                    }
+                }
+            }
+            if let Return {
+                ty: ResolvedPath { did, .. }, ..
+            } = func.output {
+                if ast_util::is_local(did) {
+                    self.types.insert(did.node);
+                }
+            }
+
             self.funcs.push(func);
+        }
+    }
+}
+
+impl<'a> visit::Visitor<'a> for CTypeVisitor<'a> {
+    fn visit_item(&mut self, item: &'a ast::Item) {
+        use syntax::ast::Item_::ItemStruct;
+        if !self.types.contains(&item.id)  {
+            return
+        }
+
+        match item.node {
+            ItemStruct(_, _) => {
+                let s = item.clean(self.tcx);
+                self.structs.push(s)
+            },
+            _ => {}
         }
     }
 }

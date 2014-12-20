@@ -23,7 +23,7 @@ pub enum Type {
     Primitive(Primitive),
     ResolvedPath {
         path: ast::Path,
-        did: ast::DefId
+        did: ast::DefId,
     }
 }
 
@@ -35,28 +35,17 @@ pub struct Arg {
 }
 
 #[deriving(Clone, Show, Hash, PartialEq, Eq)]
+pub struct Return {
+    pub ty: Type,
+    pub ty_node: Option<NodeId>
+}
+
+#[deriving(Clone, Show, Hash, PartialEq, Eq)]
 pub struct FnDecl {
     pub name: String,
     pub inputs: Vec<Arg>,
-    pub output: Type,
+    pub output: Return,
     pub span: codemap::Span
-}
-
-impl Clean<FnDecl> for ast::Item {
-    fn clean(&self, tcx: &ty::ctxt) -> FnDecl {
-        use syntax::ast::ItemFn;
-
-        // FIXME: mangled names... export_name...
-        match self.node {
-            ItemFn(ref decl, _, _, _, _) => FnDecl {
-                name: self.ident.as_str().into_string(),
-                inputs: decl.inputs.clean(tcx),
-                output: decl.output.clean(tcx),
-                span: self.span
-            },
-            _ => unreachable!()
-        }
-    }
 }
 
 impl<T: Clean<C>, C> Clean<Vec<C>> for Vec<T> {
@@ -65,11 +54,17 @@ impl<T: Clean<C>, C> Clean<Vec<C>> for Vec<T> {
     }
 }
 
-impl Clean<String> for ast::Pat {
+impl Clean<String> for ast::Ident {
     fn clean(&self, _: &ty::ctxt) -> String {
+        self.name.as_str().into_string()
+    }
+}
+
+impl Clean<String> for ast::Pat {
+    fn clean(&self, tcx: &ty::ctxt) -> String {
         match self.node {
             ast::PatIdent(_, ref ident, _) => {
-                ident.node.as_str().into_string()
+                ident.node.clean(tcx)
             }
             _ => panic!("unimplemented: {}", self)
         }
@@ -88,10 +83,13 @@ impl Clean<Arg> for ast::Arg {
 
 impl Clean<Type> for ast::Ty {
     fn clean(&self, tcx: &ty::ctxt) -> Type {
-        // FIXME: is_ffi_safe
         let (path, def) = match self.node {
             ast::TyPath(ref path, id) => (path.clone(), tcx.def_map.borrow()[id]),
-            _ => unimplemented!()
+            ast::TyTup(ref tup) => {
+                assert!(tup.is_empty());
+                return Type::Primitive(Primitive::Unit)
+            },
+            _ => panic!("unimplemented: {}", self.node)
         };
 
         match def {
@@ -104,19 +102,79 @@ impl Clean<Type> for ast::Ty {
             },
             def::DefTy(def_id, false) => Type::ResolvedPath {
                 path: path,
-                did: def_id
+                did: def_id,
             },
             _ => panic!("not yet implemented: {}", def)
         }
     }
 }
 
-impl<'a> Clean<Type> for ast::FunctionRetTy {
-    fn clean(&self, tcx: &ty::ctxt) -> Type {
+impl Clean<Return> for ast::FunctionRetTy {
+    fn clean(&self, tcx: &ty::ctxt) -> Return {
         use syntax::ast::FunctionRetTy::{NoReturn, Return};
-        match *self {
-            Return(ref ty) => ty.clean(tcx),
-            NoReturn(_) => Type::Primitive(Primitive::Unit)
+        let (ty, id) = match *self {
+            Return(ref ty) => (ty.clean(tcx), Some(ty.id)),
+            NoReturn(_) => (Type::Primitive(Primitive::Unit), None)
+        };
+        Return {
+            ty: ty,
+            ty_node: id
         }
     }
 }
+
+impl Clean<FnDecl> for ast::Item {
+    fn clean(&self, tcx: &ty::ctxt) -> FnDecl {
+        use syntax::ast::ItemFn;
+        // FIXME: mangled names... export_name...
+        match self.node {
+            ItemFn(ref decl, _, _, _, _) => FnDecl {
+                name: self.ident.clean(tcx),
+                inputs: decl.inputs.clean(tcx),
+                output: decl.output.clean(tcx),
+                span: self.span
+            },
+            _ => unreachable!()
+        }
+    }
+}
+
+#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+pub struct Struct {
+    pub name: String,
+    pub fields: Vec<StructField>
+}
+
+impl Clean<Struct> for ast::Item {
+    fn clean(&self, tcx: &ty::ctxt) -> Struct {
+        use syntax::ast::ItemStruct;
+        // FIXME: mangled names... export_name...
+        match self.node {
+            ItemStruct(ref decl, _,) => Struct {
+                name: self.ident.clean(tcx),
+                fields: decl.fields.clean(tcx)
+            },
+            _ => unreachable!()
+        }
+    }
+}
+
+#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+pub struct StructField {
+    pub name: String,
+    pub ty: Type
+}
+
+impl Clean<StructField> for ast::StructField {
+    fn clean(&self, tcx: &ty::ctxt) -> StructField {
+        let name = match self.node.kind {
+            ast::NamedField(ref id, _) => id.clean(tcx),
+            ast::UnnamedField(_) => unimplemented!()
+        };
+        StructField {
+            name: name,
+            ty: self.node.ty.clean(tcx)
+        }
+    }
+}
+

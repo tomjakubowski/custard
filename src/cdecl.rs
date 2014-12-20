@@ -1,4 +1,4 @@
-use clean::{Arg, FnDecl, Primitive, Type};
+use clean::{Arg, FnDecl, Primitive, Struct, Type};
 
 // FIXME: these names are nonsense
 pub trait Cdecl {
@@ -8,7 +8,7 @@ pub trait Cdecl {
 impl Cdecl for FnDecl {
     fn cdecl(&self) -> String {
         format!("{} {}({});",
-                self.output.ctype_spec(),
+                self.output.ty.ctype_spec(),
                 self.name,
                 self.inputs.cdecl())
     }
@@ -31,15 +31,15 @@ impl Cdecl for Vec<Arg> {
     }
 }
 
-impl Cdecl for Type {
+impl Cdecl for Struct {
     fn cdecl(&self) -> String {
-        match *self {
-            Type::ResolvedPath { ref path, .. } => {
-                let ref last = path.segments[path.segments.len() - 1];
-                format!("struct {}", last.identifier.as_str()) // wrrrooonnngggg
-            }
-            Type::Primitive(_) => panic!("cannot redeclare a primitive!"),
+        let mut out = Vec::<u8>::with_capacity(32);
+        write!(&mut out, "struct {} {{", self.name);
+        for f in self.fields.iter() {
+            write!(&mut out, "\n    {} {};", f.ty.ctype_spec(), f.name);
         }
+        writeln!(&mut out, "\n}};");
+        String::from_utf8(out).unwrap()
     }
 }
 
@@ -47,19 +47,24 @@ pub trait CtypeSpec {
     fn ctype_spec(&self) -> String;
 }
 
+impl CtypeSpec for Struct {
+    fn ctype_spec(&self) -> String {
+        format!("struct {}", self.name)
+    }
+}
 impl CtypeSpec for Type {
     fn ctype_spec(&self) -> String {
         match *self {
+            Type::Primitive(Primitive::Unit) => "void".into_string(),
             Type::Primitive(Primitive::I8) => "int8_t".into_string(),
             Type::Primitive(Primitive::I16) => "int16_t".into_string(),
             Type::Primitive(Primitive::I32) => "int32_t".into_string(),
             Type::Primitive(Primitive::I64) => "int64_t".into_string(),
             Type::ResolvedPath { ref path, .. } => {
                 let ref last = path.segments[path.segments.len() - 1];
+                // FIXME: wrong for not-structs
                 format!("struct {}", last.identifier.as_str())
             }
-            _ => unimplemented!()
-
         }
     }
 }
