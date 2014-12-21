@@ -60,7 +60,7 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
     let krate = driver::phase_1_parse_input(&sess, cfg, &input);
 
     let krate = driver::phase_2_configure_and_expand(&sess, krate, name.as_slice(), None)
-                    .expect("phase_2_configure_and_expand aborted in rustdoc!");
+        .expect("phase_2_configure_and_expand aborted in rustdoc!");
 
     let mut forest = ast_map::Forest::new(krate);
     let ast_map = driver::assign_node_ids_and_map(&sess, &mut forest);
@@ -83,28 +83,11 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
 
     debug!("ty_visitor structs: {}", ty_visitor.structs);
 
-    // let types = collect_types(ty_cx, visitor.types.iter().map(|&x| x));
-    // debug!("types: {}", types);
-
-    // TODO: Do this in two passes:
-    // 1) Walk over fns, collecting + cleaning pub extern ones, and the def or node IDs
-    //    of types referenced in the inputs/output of those fns. Check for no_mangle and
-    //    export_name.  Args should be Type::ResolvedPath or Primitive.
-    // 2) Walk over struct/enum/... items, collecting + cleaning those which correspond
-    //    to the def or node IDs. Check is_ffi_safe and whatever else.  Cleaned output
-    //    be an enum Item {
-    //        Struct { name: String, fields: Vec<Item>, .. },
-    //        Field { name: String, ty: Type, .. }, },
-    //        Enum { .. /* ??? */ },
-    //    }
-    // Still to be figured out: type defs, pointers (should just be another Type
-    // variant I reckon)
-
-    // write needed includes (FIXME: this should actually be computed)
+    // necessary includes (FIXME: compute this)
     println!("#include <stdint.h>");
     println!("");
 
-    // write forward decls of types... (FIXME: lol (these should also be computed))
+    // write forward decls of types (FIXME: compute this [should be straightforward])
     for t in ty_visitor.structs.iter() {
         use cdecl::CtypeSpec;
         println!("{};", t.ctype_spec());

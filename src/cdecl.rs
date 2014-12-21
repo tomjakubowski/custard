@@ -1,4 +1,4 @@
-use clean::{Arg, FnDecl, Primitive, Struct, Type};
+use clean::{Arg, FnDecl, PointerKind, Primitive, Struct, Type};
 
 // FIXME: these names are nonsense
 pub trait Cdecl {
@@ -60,6 +60,12 @@ impl CtypeSpec for Type {
             Type::Primitive(Primitive::I16) => "int16_t".into_string(),
             Type::Primitive(Primitive::I32) => "int32_t".into_string(),
             Type::Primitive(Primitive::I64) => "int64_t".into_string(),
+            Type::Pointer(PointerKind::Const, ref t) => {
+                format!("const {} *", t.ctype_spec())
+            },
+            Type::Pointer(PointerKind::Mutable, ref t) => {
+                format!("{} *", t.ctype_spec())
+            },
             Type::ResolvedPath { ref path, .. } => {
                 let ref last = path.segments[path.segments.len() - 1];
                 // FIXME: wrong for not-structs

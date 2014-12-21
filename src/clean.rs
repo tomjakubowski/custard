@@ -19,8 +19,15 @@ pub enum Primitive {
 }
 
 #[deriving(Clone, Show, Hash, PartialEq, Eq)]
+pub enum PointerKind {
+    Mutable,
+    Const
+}
+
+#[deriving(Clone, Show, Hash, PartialEq, Eq)]
 pub enum Type {
     Primitive(Primitive),
+    Pointer(PointerKind, Box<Type>),
     ResolvedPath {
         path: ast::Path,
         did: ast::DefId,
@@ -81,6 +88,17 @@ impl Clean<Arg> for ast::Arg {
     }
 }
 
+impl Clean<PointerKind> for ast::Mutability {
+    fn clean(&self, _: &ty::ctxt) -> PointerKind {
+        use syntax::ast::Mutability;
+
+        match *self {
+            Mutability::MutMutable => PointerKind::Mutable,
+            Mutability::MutImmutable => PointerKind::Const
+        }
+    }
+}
+
 impl Clean<Type> for ast::Ty {
     fn clean(&self, tcx: &ty::ctxt) -> Type {
         let (path, def) = match self.node {
@@ -88,6 +106,9 @@ impl Clean<Type> for ast::Ty {
             ast::TyTup(ref tup) => {
                 assert!(tup.is_empty());
                 return Type::Primitive(Primitive::Unit)
+            },
+            ast::TyPtr(ref mty) => {
+                return Type::Pointer(mty.mutbl.clean(tcx), box mty.ty.clean(tcx))
             },
             _ => panic!("unimplemented: {}", self.node)
         };

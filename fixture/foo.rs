@@ -34,9 +34,19 @@ pub extern "C" fn id_tinypt(x: TinyPoint) -> TinyPoint { x }
 pub extern "C" fn id_bigpt(x: BigPoint) -> BigPoint { x }
 
 #[no_mangle]
-pub extern "C" fn print_bigpt(p: BigPoint) {
+pub extern "C" fn print_bigpt(p: *const BigPoint) {
     let fmt = b"BigPoint <%d, %d, %d>\n\0";
-    unsafe { printf(fmt.as_ptr() as *const _, p.x, p.y, p.z) }
+    unsafe { printf(fmt.as_ptr() as *const _, (*p).x, (*p).y, (*p).z) }
+}
+
+#[no_mangle]
+pub extern "C" fn zero_bigpt(p: *mut BigPoint) {
+    if p.is_null() { return }
+    unsafe {
+        (*p).x = 0;
+        (*p).y = 0;
+        (*p).z = 0;
+    }
 }
 
 extern {
