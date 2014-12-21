@@ -34,11 +34,11 @@ impl Cdecl for Vec<Arg> {
 impl Cdecl for Struct {
     fn cdecl(&self) -> String {
         let mut out = Vec::<u8>::with_capacity(32);
-        write!(&mut out, "struct {} {{", self.name);
+        write!(&mut out, "struct {} {{", self.name).unwrap();
         for f in self.fields.iter() {
-            write!(&mut out, "\n    {} {};", f.ty.ctype_spec(), f.name);
+            write!(&mut out, "\n    {} {};", f.ty.ctype_spec(), f.name).unwrap();
         }
-        writeln!(&mut out, "\n}};");
+        writeln!(&mut out, "\n}};").unwrap();
         String::from_utf8(out).unwrap()
     }
 }
