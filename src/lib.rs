@@ -144,6 +144,8 @@ impl<'a> visit::Visitor<'a> for CFnDeclVisitor<'a> {
         use syntax::ast::Item_::ItemFn;
         use clean::Type::ResolvedPath;
 
+        // FIXME: once rust-lang/rust#19834, can replace this with just
+        // denying the improper_ctypes lint
         fn check_ty(tcx: &ty::ctxt, node: ast::NodeId) -> bool {
             let tty = match tcx.ast_ty_to_ty_cache.borrow()[node] {
                 ty::atttce_resolved(tty) => tty,
@@ -159,12 +161,12 @@ impl<'a> visit::Visitor<'a> for CFnDeclVisitor<'a> {
 
             for &ast::Arg { ref ty, .. } in fn_decl.inputs.iter() {
                 if !check_ty(self.tcx, ty.id) {
-                    self.tcx.sess.span_fatal(ty.span, "bad type!");
+                    self.tcx.sess.span_fatal(ty.span, "Type is not FFI safe.");
                 }
             }
             if let ast::FunctionRetTy::Return(ref ty) = fn_decl.output {
                 if !check_ty(self.tcx, ty.id) {
-                    self.tcx.sess.span_fatal(ty.span, "bad type!");
+                    self.tcx.sess.span_fatal(ty.span, "Type is not FFI safe.");
                 }
             }
 
