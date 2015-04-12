@@ -31,6 +31,7 @@ pub extern "C" fn id_8(x: i8) -> i8 { x }
 pub extern "C" fn id_16(x: i16) -> i16 { x }
 pub extern "C" fn id_32(x: i32) -> i32 { x }
 pub extern "C" fn id_tinypt(x: TinyPoint) -> TinyPoint { x }
+/*
 pub extern "C" fn id_bigpt(x: BigPoint) -> BigPoint { x }
 
 #[no_mangle]
@@ -49,6 +50,10 @@ pub extern "C" fn zero_bigpt(p: *mut BigPoint) {
     }
 }
 
+#[no_mangle]
+// pub extern "C" fn foo(p: Option<i32>) { }
+
 extern {
     fn printf(fmt: *const libc::c_char, ...);
 }
+*/

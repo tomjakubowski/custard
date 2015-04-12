@@ -1,14 +1,16 @@
-#![feature(phase)]
+#![feature(box_syntax)]
 
 extern crate arena;
 extern crate rustc;
 extern crate rustc_driver;
+extern crate rustc_resolve;
 extern crate syntax;
 
-#[phase(plugin, link)] extern crate log;
+#[macro_use] extern crate log;
 
 use rustc_driver::driver;
-use rustc::session::{mod, config};
+use rustc_resolve::MakeGlobMap;
+use rustc::session::{self, config};
 use rustc::middle::ty;
 
 use syntax::{ast, ast_map, ast_util, codemap, diagnostic, visit};
@@ -28,19 +30,24 @@ pub type Externs = HashMap<String, Vec<String>>;
 
 pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
                 input: Input, triple: Option<String>) {
+    use rustc::session::search_paths::SearchPaths;
+    use rustc_resolve::MakeGlobMap;
+
     // FIXME: cut the rustdoc stuff we don't need
 
     // Parse, resolve, and typecheck the given crate.
 
     let name = driver::anon_src();
+    let mut search_paths = SearchPaths::new();
+    search_paths.add_path("/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib");
 
     let sessopts = config::Options {
         maybe_sysroot: None,
-        addl_lib_search_paths: RefCell::new(libs),
         crate_types: vec![config::CrateTypeRlib],
         externs: externs,
         target_triple: triple.unwrap_or(config::host_triple().to_string()),
         cfg: config::parse_cfgspecs(cfgs),
+        search_paths: search_paths,
         // FIXME: use the improper_ctypes lint once #19834 is fixed
         ..config::basic_options().clone()
     };
@@ -65,23 +72,23 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
     let mut forest = ast_map::Forest::new(krate);
     let ast_map = driver::assign_node_ids_and_map(&sess, &mut forest);
 
-    let type_arena = TypedArena::new();
+    let type_arena = ty::CtxtArenas::new();
     let ty::CrateAnalysis {
         ref ty_cx, ..
-    } = driver::phase_3_run_analysis_passes(sess, ast_map, &type_arena, name);
+    } = driver::phase_3_run_analysis_passes(sess, ast_map, &type_arena, name, MakeGlobMap::No);
 
     let mut fn_visitor = CFnDeclVisitor::new(ty_cx);
     visit::walk_crate(&mut fn_visitor, ty_cx.map.krate());
 
-    debug!("type node ids: {}", fn_visitor.types);
+    debug!("type node ids: {:?}", fn_visitor.types);
 
-    debug!("ast_ty_to... {}",
+    debug!("ast_ty_to... {:?}",
            ty_cx.ast_ty_to_ty_cache.borrow().keys().collect::<Vec<_>>());
 
     let mut ty_visitor = CTypeVisitor::new(ty_cx, fn_visitor.types);
     visit::walk_crate(&mut ty_visitor, ty_cx.map.krate());
 
-    debug!("ty_visitor structs: {}", ty_visitor.structs);
+    // debug!("ty_visitor structs: {:?}", ty_visitor.structs);
 
     // necessary includes (FIXME: compute this)
     println!("#include <stdint.h>");

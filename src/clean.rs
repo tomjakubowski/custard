@@ -3,6 +3,8 @@ use rustc::middle::{def, ty};
 use syntax::{ast, codemap};
 use syntax::ast::NodeId;
 
+use std::borrow::ToOwned;
+
 pub trait Clean<T> {
     fn clean(&self, &ty::ctxt) -> T;
 }
@@ -63,7 +65,7 @@ impl<T: Clean<C>, C> Clean<Vec<C>> for Vec<T> {
 
 impl Clean<String> for ast::Ident {
     fn clean(&self, _: &ty::ctxt) -> String {
-        self.name.as_str().into_string()
+        self.name.as_str().to_owned()
     }
 }
 
@@ -73,7 +75,7 @@ impl Clean<String> for ast::Pat {
             ast::PatIdent(_, ref ident, _) => {
                 ident.node.clean(tcx)
             }
-            _ => panic!("unimplemented: {}", self)
+            _ => panic!("unimplemented: {:?}", self)
         }
     }
 }
@@ -110,7 +112,7 @@ impl Clean<Type> for ast::Ty {
             ast::TyPtr(ref mty) => {
                 return Type::Pointer(mty.mutbl.clean(tcx), box mty.ty.clean(tcx))
             },
-            _ => panic!("unimplemented: {}", self.node)
+            _ => panic!("unimplemented: {:?}", self.node)
         };
 
         match def {
@@ -125,17 +127,17 @@ impl Clean<Type> for ast::Ty {
                 path: path,
                 did: def_id,
             },
-            _ => panic!("not yet implemented: {}", def)
+            _ => panic!("not yet implemented: {:?}", def)
         }
     }
 }
 
 impl Clean<Return> for ast::FunctionRetTy {
     fn clean(&self, tcx: &ty::ctxt) -> Return {
-        use syntax::ast::FunctionRetTy::{NoReturn, Return};
+        use syntax::ast::FunctionRetTy::{DefaultReturn, NoReturn, Return};
         let (ty, id) = match *self {
             Return(ref ty) => (ty.clean(tcx), Some(ty.id)),
-            NoReturn(_) => (Type::Primitive(Primitive::Unit), None)
+            DefaultReturn(_) | NoReturn(_) => (Type::Primitive(Primitive::Unit), None)
         };
         Return {
             ty: ty,

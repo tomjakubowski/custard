@@ -1,3 +1,5 @@
+use std::borrow::ToOwned;
+
 use clean::{Arg, FnDecl, PointerKind, Primitive, Struct, Type};
 
 // FIXME: these names are nonsense
@@ -55,11 +57,11 @@ impl CtypeSpec for Struct {
 impl CtypeSpec for Type {
     fn ctype_spec(&self) -> String {
         match *self {
-            Type::Primitive(Primitive::Unit) => "void".into_string(),
-            Type::Primitive(Primitive::I8) => "int8_t".into_string(),
-            Type::Primitive(Primitive::I16) => "int16_t".into_string(),
-            Type::Primitive(Primitive::I32) => "int32_t".into_string(),
-            Type::Primitive(Primitive::I64) => "int64_t".into_string(),
+            Type::Primitive(Primitive::Unit) => "void".to_owned(),
+            Type::Primitive(Primitive::I8) => "int8_t".to_owned(),
+            Type::Primitive(Primitive::I16) => "int16_t".to_owned(),
+            Type::Primitive(Primitive::I32) => "int32_t".to_owned(),
+            Type::Primitive(Primitive::I64) => "int64_t".to_owned(),
             Type::Pointer(PointerKind::Const, ref t) => {
                 format!("const {} *", t.ctype_spec())
             },
