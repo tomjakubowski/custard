@@ -1,5 +1,7 @@
 use std::borrow::ToOwned;
 
+use std::io::Write;
+
 use clean::{Arg, FnDecl, PointerKind, Primitive, Struct, Type};
 
 // FIXME: these names are nonsense

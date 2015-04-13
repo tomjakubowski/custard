@@ -11,7 +11,7 @@ pub trait Clean<T> {
 
 // "cleaned" rust types
 
-#[deriving(Clone, Copy, Show, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Primitive {
     Unit,
     I8,
@@ -20,13 +20,13 @@ pub enum Primitive {
     I64
 }
 
-#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum PointerKind {
     Mutable,
     Const
 }
 
-#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum Type {
     Primitive(Primitive),
     Pointer(PointerKind, Box<Type>),
@@ -36,20 +36,20 @@ pub enum Type {
     }
 }
 
-#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Arg {
     pub name: String,
     pub ty: Type,
     pub ty_node: NodeId
 }
 
-#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Return {
     pub ty: Type,
     pub ty_node: Option<NodeId>
 }
 
-#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct FnDecl {
     pub name: String,
     pub inputs: Vec<Arg>,
@@ -103,19 +103,19 @@ impl Clean<PointerKind> for ast::Mutability {
 
 impl Clean<Type> for ast::Ty {
     fn clean(&self, tcx: &ty::ctxt) -> Type {
-        let (path, def) = match self.node {
-            ast::TyPath(ref path, id) => (path.clone(), tcx.def_map.borrow()[id]),
+        let (path, res) = match self.node {
+            ast::TyPath(_, ref path) => (path.clone(), tcx.def_map.borrow()[&self.id]),
             ast::TyTup(ref tup) => {
                 assert!(tup.is_empty());
                 return Type::Primitive(Primitive::Unit)
             },
             ast::TyPtr(ref mty) => {
-                return Type::Pointer(mty.mutbl.clean(tcx), box mty.ty.clean(tcx))
+                return Type::Pointer(mty.mutbl.clean(tcx), Box::new(mty.ty.clean(tcx)))
             },
             _ => panic!("unimplemented: {:?}", self.node)
         };
 
-        match def {
+        match res.base_def {
             def::DefPrimTy(p) => match p {
                 ast::TyInt(ast::TyI8)  => Type::Primitive(Primitive::I8),
                 ast::TyInt(ast::TyI16) => Type::Primitive(Primitive::I16),
@@ -127,7 +127,7 @@ impl Clean<Type> for ast::Ty {
                 path: path,
                 did: def_id,
             },
-            _ => panic!("not yet implemented: {:?}", def)
+            _ => panic!("not yet implemented: {:?}", res.base_def)
         }
     }
 }
@@ -162,7 +162,7 @@ impl Clean<FnDecl> for ast::Item {
     }
 }
 
-#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Struct {
     pub name: String,
     pub fields: Vec<StructField>
@@ -182,7 +182,7 @@ impl Clean<Struct> for ast::Item {
     }
 }
 
-#[deriving(Clone, Show, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct StructField {
     pub name: String,
     pub ty: Type

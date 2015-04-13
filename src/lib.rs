@@ -1,6 +1,4 @@
-#![feature(box_syntax)]
-
-extern crate arena;
+#![feature(rustc_private)]
 extern crate rustc;
 extern crate rustc_driver;
 extern crate rustc_resolve;
@@ -17,7 +15,7 @@ use syntax::{ast, ast_map, ast_util, codemap, diagnostic, visit};
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use arena::TypedArena;
+use std::path::PathBuf;
 
 pub use rustc::session::config::Input;
 
@@ -28,7 +26,7 @@ mod clean;
 
 pub type Externs = HashMap<String, Vec<String>>;
 
-pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
+pub fn run_core(libs: Vec<PathBuf>, cfgs: Vec<String>, externs: Externs,
                 input: Input, triple: Option<String>) {
     use rustc::session::search_paths::SearchPaths;
     use rustc_resolve::MakeGlobMap;
@@ -54,7 +52,7 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
 
 
     let codemap = codemap::CodeMap::new();
-    let diagnostic_handler = diagnostic::default_handler(diagnostic::Auto, None);
+    let diagnostic_handler = diagnostic::default_handler(diagnostic::Auto, None, true);
     let span_diagnostic_handler =
         diagnostic::mk_span_handler(diagnostic_handler, codemap);
 
@@ -66,51 +64,51 @@ pub fn run_core(libs: Vec<Path>, cfgs: Vec<String>, externs: Externs,
 
     let krate = driver::phase_1_parse_input(&sess, cfg, &input);
 
-    let krate = driver::phase_2_configure_and_expand(&sess, krate, name.as_slice(), None)
+    let krate = driver::phase_2_configure_and_expand(&sess, krate, &name, None)
         .expect("phase_2_configure_and_expand aborted in rustdoc!");
 
     let mut forest = ast_map::Forest::new(krate);
+    let type_arena = ty::CtxtArenas::new();
     let ast_map = driver::assign_node_ids_and_map(&sess, &mut forest);
 
-    let type_arena = ty::CtxtArenas::new();
-    let ty::CrateAnalysis {
-        ref ty_cx, ..
-    } = driver::phase_3_run_analysis_passes(sess, ast_map, &type_arena, name, MakeGlobMap::No);
+    // let ty::CrateAnalysis {
+    //     ty_cx, ..
+    // } = driver::phase_3_run_analysis_passes(sess, ast_map, &type_arena, name, MakeGlobMap::No);
 
-    let mut fn_visitor = CFnDeclVisitor::new(ty_cx);
-    visit::walk_crate(&mut fn_visitor, ty_cx.map.krate());
+    // let mut fn_visitor = CFnDeclVisitor::new(&ty_cx);
+    // visit::walk_crate(&mut fn_visitor, ty_cx.map.krate());
 
-    debug!("type node ids: {:?}", fn_visitor.types);
+    // debug!("type node ids: {:?}", fn_visitor.types);
 
-    debug!("ast_ty_to... {:?}",
-           ty_cx.ast_ty_to_ty_cache.borrow().keys().collect::<Vec<_>>());
+    // debug!("ast_ty_to... {:?}",
+    //        ty_cx.ast_ty_to_ty_cache.borrow().keys().collect::<Vec<_>>());
 
-    let mut ty_visitor = CTypeVisitor::new(ty_cx, fn_visitor.types);
-    visit::walk_crate(&mut ty_visitor, ty_cx.map.krate());
+    // let mut ty_visitor = CTypeVisitor::new(&ty_cx, fn_visitor.types);
+    // visit::walk_crate(&mut ty_visitor, ty_cx.map.krate());
 
-    // debug!("ty_visitor structs: {:?}", ty_visitor.structs);
+    // // debug!("ty_visitor structs: {:?}", ty_visitor.structs);
 
-    // necessary includes (FIXME: compute this)
-    println!("#include <stdint.h>");
-    println!("");
+    // // necessary includes (FIXME: compute this)
+    // println!("#include <stdint.h>");
+    // println!("");
 
-    // write forward decls of types (FIXME: compute this [should be straightforward])
-    for t in ty_visitor.structs.iter() {
-        use cdecl::CtypeSpec;
-        println!("{};", t.ctype_spec());
-    }
+    // // write forward decls of types (FIXME: compute this [should be straightforward])
+    // for t in ty_visitor.structs.iter() {
+    //     use cdecl::CtypeSpec;
+    //     println!("{};", t.ctype_spec());
+    // }
 
-    // write actual decls of types
-    for t in ty_visitor.structs.iter() {
-        use cdecl::Cdecl;
-        println!("{}", t.cdecl());
-    }
+    // // write actual decls of types
+    // for t in ty_visitor.structs.iter() {
+    //     use cdecl::Cdecl;
+    //     println!("{}", t.cdecl());
+    // }
 
-    // write fn prototypes
-    for f in fn_visitor.funcs.iter() {
-        use cdecl::Cdecl;
-        println!("{}", f.cdecl());
-    }
+    // // write fn prototypes
+    // for f in fn_visitor.funcs.iter() {
+    //     use cdecl::Cdecl;
+    //     println!("{}", f.cdecl());
+    // }
 }
 
 struct CFnDeclVisitor<'tcx> {
@@ -154,8 +152,8 @@ impl<'a> visit::Visitor<'a> for CFnDeclVisitor<'a> {
         // FIXME: once rust-lang/rust#19834, can replace this with just
         // denying the improper_ctypes lint
         fn check_ty(tcx: &ty::ctxt, node: ast::NodeId) -> bool {
-            let tty = match tcx.ast_ty_to_ty_cache.borrow()[node] {
-                ty::atttce_resolved(tty) => tty,
+            let tty = match tcx.ast_ty_to_ty_cache.borrow().get(&node) {
+                Some(tty) => tty.clone(),
                 _ => panic!("ty missing from attt cache")
             };
             ty::is_ffi_safe(tcx, tty)
