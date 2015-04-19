@@ -1,114 +1,81 @@
 #![feature(rustc_private)]
+extern crate getopts;
+#[macro_use] extern crate log;
 extern crate rustc;
 extern crate rustc_driver;
-extern crate rustc_resolve;
 extern crate syntax;
 
-#[macro_use] extern crate log;
-
-use rustc_driver::driver;
-use rustc_resolve::MakeGlobMap;
-use rustc::session::{self, config};
+use rustc_driver::{driver, CompilerCalls, Compilation, RustcDefaultCalls};
+use rustc::session::Session;
+use rustc::session::config::{self, Input};
 use rustc::middle::ty;
 
-use syntax::{ast, ast_map, ast_util, codemap, diagnostic, visit};
+// Impressive that there are both `diagnostic` and `diagnostics` modules
+use syntax::{ast, ast_map, ast_util, codemap, diagnostic, diagnostics, visit};
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::env::Args;
 use std::path::PathBuf;
-
-pub use rustc::session::config::Input;
 
 use clean::{Arg, Clean, FnDecl, Return, Struct};
 
 mod cdecl;
 mod clean;
 
-pub type Externs = HashMap<String, Vec<String>>;
+struct CustardCalls {
+    default_calls: RustcDefaultCalls
+}
 
-pub fn run_core(libs: Vec<PathBuf>, cfgs: Vec<String>, externs: Externs,
-                input: Input, triple: Option<String>) {
-    use rustc::session::search_paths::SearchPaths;
-    use rustc_resolve::MakeGlobMap;
+impl CustardCalls {
+    fn new() -> Self {
+        CustardCalls {
+            default_calls: RustcDefaultCalls
+        }
+    }
+}
 
-    // FIXME: cut the rustdoc stuff we don't need
+impl<'a> CompilerCalls<'a> for CustardCalls {
+    fn early_callback(&mut self,
+                      _: &getopts::Matches,
+                      _: &diagnostics::registry::Registry) -> Compilation {
+        Compilation::Continue
+    }
 
-    // Parse, resolve, and typecheck the given crate.
+    fn late_callback(&mut self,
+                     m: &getopts::Matches,
+                     s: &Session,
+                     i: &Input,
+                     odir: &Option<PathBuf>,
+                     ofile: &Option<PathBuf>) -> Compilation {
+        self.default_calls.late_callback(m, s, i, odir, ofile);
+        Compilation::Continue
+    }
 
-    let name = driver::anon_src();
-    let mut search_paths = SearchPaths::new();
-    search_paths.add_path("/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib");
+    fn no_input(&mut self,
+                _: &getopts::Matches,
+                _: &config::Options,
+                _: &Option<PathBuf>,
+                _: &Option<PathBuf>,
+                _: &diagnostics::registry::Registry) -> Option<(Input, Option<PathBuf>)> {
+        None
+    }
 
-    let sessopts = config::Options {
-        maybe_sysroot: None,
-        crate_types: vec![config::CrateTypeRlib],
-        externs: externs,
-        target_triple: triple.unwrap_or(config::host_triple().to_string()),
-        cfg: config::parse_cfgspecs(cfgs),
-        search_paths: search_paths,
-        // FIXME: use the improper_ctypes lint once #19834 is fixed
-        ..config::basic_options().clone()
-    };
+    fn build_controller(&mut self,
+                        _: &Session) -> driver::CompileController<'a> {
+        let mut ctrl = driver::CompileController::basic();
+        ctrl.after_analysis.stop = Compilation::Stop;
+        ctrl.after_analysis.callback = Box::new(|state| {
+            let tcx = state.tcx.unwrap();
+            let krate = state.expanded_crate.unwrap();
+        });
+        ctrl
+    }
 
-
-    let codemap = codemap::CodeMap::new();
-    let diagnostic_handler = diagnostic::default_handler(diagnostic::Auto, None, true);
-    let span_diagnostic_handler =
-        diagnostic::mk_span_handler(diagnostic_handler, codemap);
-
-    let sess = session::build_session_(sessopts,
-                                       None, // FIXME
-                                       span_diagnostic_handler);
-
-    let cfg = config::build_configuration(&sess);
-
-    let krate = driver::phase_1_parse_input(&sess, cfg, &input);
-
-    let krate = driver::phase_2_configure_and_expand(&sess, krate, &name, None)
-        .expect("phase_2_configure_and_expand aborted in rustdoc!");
-
-    let mut forest = ast_map::Forest::new(krate);
-    let type_arena = ty::CtxtArenas::new();
-    let ast_map = driver::assign_node_ids_and_map(&sess, &mut forest);
-
-    // let ty::CrateAnalysis {
-    //     ty_cx, ..
-    // } = driver::phase_3_run_analysis_passes(sess, ast_map, &type_arena, name, MakeGlobMap::No);
-
-    // let mut fn_visitor = CFnDeclVisitor::new(&ty_cx);
-    // visit::walk_crate(&mut fn_visitor, ty_cx.map.krate());
-
-    // debug!("type node ids: {:?}", fn_visitor.types);
-
-    // debug!("ast_ty_to... {:?}",
-    //        ty_cx.ast_ty_to_ty_cache.borrow().keys().collect::<Vec<_>>());
-
-    // let mut ty_visitor = CTypeVisitor::new(&ty_cx, fn_visitor.types);
-    // visit::walk_crate(&mut ty_visitor, ty_cx.map.krate());
-
-    // // debug!("ty_visitor structs: {:?}", ty_visitor.structs);
-
-    // // necessary includes (FIXME: compute this)
-    // println!("#include <stdint.h>");
-    // println!("");
-
-    // // write forward decls of types (FIXME: compute this [should be straightforward])
-    // for t in ty_visitor.structs.iter() {
-    //     use cdecl::CtypeSpec;
-    //     println!("{};", t.ctype_spec());
-    // }
-
-    // // write actual decls of types
-    // for t in ty_visitor.structs.iter() {
-    //     use cdecl::Cdecl;
-    //     println!("{}", t.cdecl());
-    // }
-
-    // // write fn prototypes
-    // for f in fn_visitor.funcs.iter() {
-    //     use cdecl::Cdecl;
-    //     println!("{}", f.cdecl());
-    // }
+}
+pub fn run_core(args: Args) {
+    let args = args.collect::<Vec<_>>();
+    rustc_driver::run_compiler(&args, &mut CustardCalls::new());
 }
 
 struct CFnDeclVisitor<'tcx> {

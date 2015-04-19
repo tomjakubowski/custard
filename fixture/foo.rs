@@ -1,31 +1,29 @@
-#![feature(globs, lang_items)]
+#![feature(core, lang_items, libc, no_std)]
 #![no_std]
 #![crate_type="staticlib"]
 
 extern crate core;
 extern crate libc;
 
-use core::prelude::*;
-
 #[lang="panic_fmt"] fn panic_fmt() -> ! { loop { }}
 #[lang="stack_exhausted"] fn stack_exhausted() -> ! { loop { }}
 #[lang="eh_personality"] fn eh_personality() -> ! { loop { }}
 
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct TinyPoint {
     pub x: i8,
     pub y: i8,
     pub z: i8
 }
-impl Copy for TinyPoint {}
 
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct BigPoint {
     pub x: i64,
     pub y: i64,
     pub z: i64
 }
-impl Copy for BigPoint {}
 
 pub extern "C" fn id_8(x: i8) -> i8 { x }
 pub extern "C" fn id_16(x: i16) -> i16 { x }
