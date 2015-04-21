@@ -61,13 +61,17 @@ impl<'a> CompilerCalls<'a> for CustardCalls {
         None
     }
 
-    fn build_controller(&mut self,
-                        _: &Session) -> driver::CompileController<'a> {
+    fn build_controller<'b>(&'b mut self, _: &Session) -> driver::CompileController<'a> {
         let mut ctrl = driver::CompileController::basic();
         ctrl.after_analysis.stop = Compilation::Stop;
-        ctrl.after_analysis.callback = Box::new(|state| {
+        ctrl.after_analysis.callback = Box::new(move |state| {
             let tcx = state.tcx.unwrap();
             let krate = state.expanded_crate.unwrap();
+            let mut fn_visitor = CFnDeclVisitor::new(tcx);
+            visit::walk_crate(&mut fn_visitor, krate);
+
+            println!("{:?}", fn_visitor.funcs);
+            println!("{:?}", fn_visitor.types);
         });
         ctrl
     }
@@ -78,14 +82,18 @@ pub fn run_core(args: Args) {
     rustc_driver::run_compiler(&args, &mut CustardCalls::new());
 }
 
-struct CFnDeclVisitor<'tcx> {
-    funcs: Vec<FnDecl>,
-    types: HashSet<ast::NodeId>,
-    tcx: &'tcx ty::ctxt<'tcx>
+struct Foo<'a, 'tcx: 'a> {
+    tcx: &'a ty::ctxt<'tcx>
 }
 
-impl<'tcx> CFnDeclVisitor<'tcx> {
-    fn new<'a>(tcx: &'a ty::ctxt<'a>) -> CFnDeclVisitor<'a> {
+struct CFnDeclVisitor<'a, 'tcx> where 'tcx: 'a {
+    funcs: Vec<FnDecl>,
+    types: HashSet<ast::NodeId>,
+    tcx: &'a ty::ctxt<'tcx>
+}
+
+impl<'a, 'tcx> CFnDeclVisitor<'a, 'tcx> where 'tcx: 'a {
+    fn new(tcx: &'a ty::ctxt<'tcx>) -> CFnDeclVisitor<'a, 'tcx> {
         CFnDeclVisitor {
             funcs: vec![],
             types: HashSet::new(),
@@ -110,7 +118,7 @@ impl<'tcx> CTypeVisitor<'tcx> {
     }
 }
 
-impl<'a> visit::Visitor<'a> for CFnDeclVisitor<'a> {
+impl<'a, 'tcx> visit::Visitor<'a> for CFnDeclVisitor<'a, 'tcx> where 'tcx: 'a {
     fn visit_item(&mut self, item: &'a ast::Item) {
         use syntax::abi::Abi;
         use syntax::ast::Item_::ItemFn;
